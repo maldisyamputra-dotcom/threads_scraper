@@ -5,6 +5,8 @@ name: Karhutla Collector Threads (tanpa login)
 # menghabiskan kuota gratis GitHub Actions (2.000 menit/bulan).
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 */12 * * *"
 
 permissions:
   contents: write  # untuk commit-back CSV hasil
