@@ -1,0 +1,52 @@
+name: Karhutla Collector Threads (tanpa login)
+
+# Trigger MANUAL dari tab Actions (pilih workflow -> Run workflow).
+# Sengaja tanpa cron: satu run bisa ~11-22 menit, cron rapat bisa
+# menghabiskan kuota gratis GitHub Actions (2.000 menit/bulan).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write  # untuk commit-back CSV hasil
+
+# Cegah dua run tumpang tindih (commit-back bisa konflik).
+concurrency:
+  group: threads-nologin
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # perlu riwayat penuh supaya pull --rebase bisa jalan
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright + Chromium
+        run: |
+          pip install playwright
+          playwright install chromium --with-deps
+
+      - name: Jalankan scraper Threads (tanpa login)
+        run: python threads_scraper_nologin.py
+
+      - name: Commit-back hasil (kumulatif)
+        run: |
+          git config user.name "threads-collector"
+          git config user.email "threads-collector@users.noreply.github.com"
+          git add threads_data_nologin.csv
+          if git diff --cached --quiet; then
+            echo "tidak ada baris baru, lewati commit"
+          else
+            git commit -m "threads nologin: tambah hasil scraping"
+            for i in 1 2 3; do
+              git pull --rebase && git push && break || sleep 10
+            done
+          fi
