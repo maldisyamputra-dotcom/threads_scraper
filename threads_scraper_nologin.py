@@ -24,6 +24,10 @@ Adaptasi dari threads_scraper.py (unggahan user):
   berulang kali tanpa kehilangan hasil run sebelumnya.
 - Tidak butuh secret apa pun (tanpa login, tanpa API key).
 
+- Durasi target 60 menit per run: semua kata kunci dipindai berulang (pass)
+  sampai 60 menit, jeda 3 menit antar pass; dedup via post_id jadi hanya
+  postingan baru yang ditambah.
+
 Cara pakai (di komputer sendiri, sekali saja):
     pip install playwright
     playwright install chromium
@@ -38,6 +42,7 @@ import json
 import os
 import random
 import re
+import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -75,6 +80,8 @@ SORT_RECENT = True         # True = terbaru; kemungkinan diabaikan Threads untuk
 OUTPUT_CSV = "threads_data_nologin.csv"
 EXISTING_CSV = "dataset_karhutla_threads_nlp.csv"  # opsional, untuk lewati duplikat lama
 HEADLESS = True            # True = browser tidak tampil di layar
+MIN_RUNTIME_MINUTES = 60   # durasi target per run; kata kunci dipindai berulang
+PASS_SLEEP_SECONDS = 180   # jeda antar pass (detik)
 # ======================================================
 
 # Skema 20 kolom, sama persis dengan dataset karhutla lainnya.
@@ -205,9 +212,36 @@ def save():
     saved += len(rows)
 
 
-async def main():
+async def scrape_keyword(page, kw):
+    """Satu kata kunci: buka halaman pencarian, scroll, simpan."""
     global current_keyword
+    current_keyword = kw
+    before = len(posts)
+    url = f"https://www.threads.com/search?q={quote(kw)}&serp_type=default"
+    if SORT_RECENT:
+        url += "&filter=recent"
+    await page.goto(url, wait_until="domcontentloaded")
+    await page.wait_for_timeout(4000)
+    await read_embedded_json(page)
+
+    stale = 0
+    for _ in range(MAX_SCROLL):
+        n = len(posts)
+        await page.mouse.wheel(0, random.randint(2500, 4000))
+        await page.wait_for_timeout(random.randint(1500, 3500))
+        stale = stale + 1 if len(posts) == n else 0
+        if stale >= 4 or len(posts) >= TARGET_TOTAL:
+            break
+
+    print(f"[{kw}] +{len(posts) - before} post | total {len(posts)}")
+    save()  # simpan bertahap supaya aman kalau terputus
+    await page.wait_for_timeout(random.randint(5000, 10000))  # jeda antar keyword
+
+
+async def main():
     load_existing_ids()
+    start = time.monotonic()
+    target_s = MIN_RUNTIME_MINUTES * 60
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=HEADLESS)
         context = await browser.new_context(
@@ -220,36 +254,27 @@ async def main():
         page = await context.new_page()
         page.on("response", on_response)
 
-        for kw in KEYWORDS:
+        pass_no = 0
+        while time.monotonic() - start < target_s:
+            pass_no += 1
+            print(f"[PASS {pass_no}] mulai")
+            for kw in KEYWORDS:
+                if len(posts) >= TARGET_TOTAL:
+                    break
+                await scrape_keyword(page, kw)
+            print(f"[PASS {pass_no}] selesai | total {len(posts)}")
             if len(posts) >= TARGET_TOTAL:
                 break
-            current_keyword = kw
-            before = len(posts)
-            url = f"https://www.threads.com/search?q={quote(kw)}&serp_type=default"
-            if SORT_RECENT:
-                url += "&filter=recent"
-            await page.goto(url, wait_until="domcontentloaded")
-            await page.wait_for_timeout(4000)
-            await read_embedded_json(page)
-
-            stale = 0
-            for _ in range(MAX_SCROLL):
-                n = len(posts)
-                await page.mouse.wheel(0, random.randint(2500, 4000))
-                await page.wait_for_timeout(random.randint(1500, 3500))
-                stale = stale + 1 if len(posts) == n else 0
-                if stale >= 4 or len(posts) >= TARGET_TOTAL:
-                    break
-
-            print(f"[{kw}] +{len(posts) - before} post | total {len(posts)}")
-            save()  # simpan bertahap supaya aman kalau terputus
-            await page.wait_for_timeout(random.randint(5000, 10000))  # jeda antar keyword
+            remaining = target_s - (time.monotonic() - start)
+            if remaining <= 0:
+                break
+            sleep_s = min(PASS_SLEEP_SECONDS, remaining)
+            print(f"[TIDUR-ANTAR-PASS] {sleep_s:.0f} detik")
+            await asyncio.sleep(sleep_s)
 
         await browser.close()
     save()
     print(f"Selesai: {len(posts)} post BARU ditambahkan ke {OUTPUT_CSV} "
           f"(file bersifat kumulatif).")
-
-
 if __name__ == "__main__":
     asyncio.run(main())
