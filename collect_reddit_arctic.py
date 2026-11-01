@@ -46,7 +46,7 @@ def log(m):
 def budget_left():
     return (T0 + MAX_MINUTES * 60) - time.time()
 
-def api(path, params, timeout=45, max_retries=8):
+def api(path, params, timeout=45, max_retries=5):
     """GET dengan retry backoff (Arctic Shift suka throttle: 'Timeout. Maybe slow down a bit')."""
     url = BASE + path + '?' + urllib.parse.urlencode(params)
     for attempt in range(max_retries):
@@ -59,14 +59,14 @@ def api(path, params, timeout=45, max_retries=8):
                 if r.status == 200:
                     d = json.loads(body)
                     if isinstance(d, dict) and d.get('data') is None and d.get('error'):
-                        raise IOError(f"API error: {d.get('error')}")
+                        raise RuntimeError(f"API error: {d.get('error')}")
                     return d
-                raise IOError(f'HTTP {r.status}')
-        except IOError:
-            raise
+                raise RuntimeError(f'HTTP {r.status}')
         except Exception as e:
+            if 'budget' in str(e):
+                raise
             wait = (20 * (2 ** attempt)) + random.uniform(0, 8)
-            log(f"[RETRY] {path} {type(e).__name__} (coba {attempt+1}/{max_retries}), tidur {wait:.0f}s")
+            log(f"[RETRY] {path} {type(e).__name__}: {e} (coba {attempt+1}/{max_retries}), tidur {wait:.0f}s")
             time.sleep(wait)
     raise IOError(f'gagal {max_retries}x: {path}')
 
