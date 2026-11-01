@@ -1,10 +1,10 @@
 name: Karhutla Collector Threads (tanpa login)
 
-# 2 SHARD PARALEL (matrix a/b) sejak 1 Nov 2026: tiap shard menangani
-# 11 kata kunci (env KEYWORD_SHARD) dan menulis file shard sendiri
+# 4 SHARD PARALEL (matrix a/b/c/d) sejak 2 Nov 2026: tiap shard menangani
+# 5-6 kata kunci (env KEYWORD_SHARD) dan menulis file shard sendiri
 # (threads_data_nologin_{shard}.csv), lalu meng-upload-nya sebagai artifact.
-# Job merge-commit (TUNGGAL, berjalan setelah kedua shard selesai) mengunduh
-# kedua artifact, menjalankan merge_threads_shards.py ->
+# Job merge-commit (TUNGGAL, berjalan setelah keempat shard selesai) mengunduh
+# keempat artifact, menjalankan merge_threads_shards.py ->
 # threads_data_nologin.csv (dedup post_id, idempoten: isi gabungan hanya
 # bergantung pada isi file shard), lalu commit-back.
 #
@@ -18,7 +18,7 @@ name: Karhutla Collector Threads (tanpa login)
 # tidak pernah sampai ke main, tanpa error yang terlihat.
 #
 # Concurrency PER SHARD (di level job, karena context matrix hanya tersedia
-# di sana): a dan b bisa jalan bersamaan; run shard yang sama tidak tumpang
+# di sana): a, b, c, d bisa jalan bersamaan; run shard yang sama tidak tumpang
 # tindih.
 #
 # Repo PUBLIK -> menit Actions unlimited (standard runner), tanpa secret.
@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 90
     strategy:
       matrix:
-        shard: [a, b]
+        shard: [a, b, c, d]
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -104,13 +104,13 @@ jobs:
           # match" dan me-merah-kan run tanpa alasan. (Run #61 gagal persis
           # karena ini: shard b 0 baris baru -> file tidak ada.)
           git add threads_data_nologin.csv
-          for f in threads_data_nologin_a.csv threads_data_nologin_b.csv; do
+          for f in threads_data_nologin_[a-d].csv; do
             [ -f "$f" ] && git add "$f"
           done
           if git diff --cached --quiet; then
             echo "tidak ada baris baru, lewati commit"
           else
-            git commit -m "threads nologin: tambah hasil scraping (2 shard)"
+            git commit -m "threads nologin: tambah hasil scraping (4 shard)"
             ok=0
             for i in 1 2 3 4 5; do
               if git pull --rebase && git push; then ok=1; break; fi
