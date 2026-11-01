@@ -1,10 +1,19 @@
 """Gabung file shard Threads -> threads_data_nologin.csv (dedup by post_id).
 
 Dijalankan tiap run workflow setelah scrape, sebelum commit-back.
-Idempoten: isi gabungan hanya bergantung pada isi file shard yang ada,
-bukan urutan run. File shard (threads_data_nologin_a.csv /
-threads_data_nologin_b.csv) bersifat kumulatif dan TIDAK PERNAH ditulis
-ulang oleh script ini; yang ditulis ulang hanya file gabungan.
+
+MONOTON (tidak pernah mengurangi baris): file gabungan yang sudah ada
+dibaca DULU, baru kemudian shard a/b digabung dengan dedup post_id.
+Ini krusial untuk bootstrap — pada run 2-shard pertama, file shard belum
+ada di repo (belum pernah di-commit) sehingga hanya berisi baris baru dari
+run itu saja; kalau file gabungan lama tidak ikut dibaca, ribuan baris
+lama akan hilang tertimpa oleh merge. (Insiden yang dicegah: run #62,
+1 Nov 2026 — 1.464 baris nyaris ter-overwrite oleh merge.)
+
+Idempoten: isi gabungan = union semua sumber yang ada, hanya bergantung
+pada isi file, bukan urutan run. File shard bersifat kumulatif (di-append
+tiap run oleh scraper) dan TIDAK PERNAH ditulis ulang oleh script ini;
+yang ditulis ulang hanya file gabungan.
 """
 
 import csv
@@ -21,11 +30,17 @@ OUT = "threads_data_nologin.csv"
 
 
 def main():
-    shard_files = [p for p in sorted(glob.glob("threads_data_nologin_[ab].csv"))
-                   if os.path.exists(p)]
+    # Urutan baca: file gabungan lama DULU (pertahankan semua baris lama),
+    # lalu shard a/b (tambah baris baru). Dedup by post_id -> hasil monoton.
+    paths = []
+    if os.path.exists(OUT):
+        paths.append(OUT)
+    paths += [p for p in sorted(glob.glob("threads_data_nologin_[ab].csv"))
+              if os.path.exists(p)]
+
     seen = set()
     rows = []
-    for path in shard_files:
+    for path in paths:
         try:
             with open(path, newline="", encoding="utf-8-sig") as f:
                 for row in csv.DictReader(f):
@@ -35,12 +50,14 @@ def main():
                         rows.append(row)
         except Exception as e:
             print(f"[MERGE] gagal baca {path} ({e}), lewati.")
+
     with open(OUT, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k, "") for k in FIELDS})
-    print(f"[MERGE] {len(rows)} baris unik dari {len(shard_files)} file shard "
+
+    print(f"[MERGE] {len(rows)} baris unik dari {len(paths)} file "
           f"-> {OUT}")
 
 
