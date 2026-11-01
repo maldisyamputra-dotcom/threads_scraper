@@ -3,7 +3,7 @@
 Dijalankan tiap run workflow setelah scrape, sebelum commit-back.
 
 MONOTON (tidak pernah mengurangi baris): file gabungan yang sudah ada
-dibaca DULU, baru kemudian shard a/b digabung dengan dedup post_id.
+dibaca DULU, baru kemudian shard a/b/c/d digabung dengan dedup post_id.
 Ini krusial untuk bootstrap — pada run 2-shard pertama, file shard belum
 ada di repo (belum pernah di-commit) sehingga hanya berisi baris baru dari
 run itu saja; kalau file gabungan lama tidak ikut dibaca, ribuan baris
@@ -31,11 +31,11 @@ OUT = "threads_data_nologin.csv"
 
 def main():
     # Urutan baca: file gabungan lama DULU (pertahankan semua baris lama),
-    # lalu shard a/b (tambah baris baru). Dedup by post_id -> hasil monoton.
+    # lalu shard a/b/c/d (tambah baris baru). Dedup by post_id -> hasil monoton.
     paths = []
     if os.path.exists(OUT):
         paths.append(OUT)
-    paths += [p for p in sorted(glob.glob("threads_data_nologin_[ab].csv"))
+    paths += [p for p in sorted(glob.glob("threads_data_nologin_[a-d].csv"))
               if os.path.exists(p)]
 
     seen = set()
