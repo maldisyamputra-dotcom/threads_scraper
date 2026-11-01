@@ -98,7 +98,15 @@ jobs:
         run: |
           git config user.name "threads-collector"
           git config user.email "threads-collector@users.noreply.github.com"
-          git add threads_data_nologin.csv threads_data_nologin_a.csv threads_data_nologin_b.csv
+          # Tambah hanya file yang ADA. Shard yang tidak menemukan baris baru
+          # tidak punya file shard (scraper hanya menulis kalau ada baris
+          # baru); git add langsung tiga path akan fatal "pathspec did not
+          # match" dan me-merah-kan run tanpa alasan. (Run #61 gagal persis
+          # karena ini: shard b 0 baris baru -> file tidak ada.)
+          git add threads_data_nologin.csv
+          for f in threads_data_nologin_a.csv threads_data_nologin_b.csv; do
+            [ -f "$f" ] && git add "$f"
+          done
           if git diff --cached --quiet; then
             echo "tidak ada baris baru, lewati commit"
           else
