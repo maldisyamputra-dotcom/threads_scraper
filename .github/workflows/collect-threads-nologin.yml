@@ -2,15 +2,27 @@ name: Karhutla Collector Threads (tanpa login)
 
 # 2 SHARD PARALEL (matrix a/b) sejak 1 Nov 2026: tiap shard menangani
 # 11 kata kunci (env KEYWORD_SHARD) dan menulis file shard sendiri
-# (threads_data_nologin_{shard}.csv). Setelah scrape, merge_threads_shards.py
-# menggabung kedua shard -> threads_data_nologin.csv (dedup post_id, global
-# antar shard). Concurrency per shard supaya a dan b bisa jalan bersamaan;
-# commit-back memakai pull --rebase + retry agar tidak konflik antar shard.
+# (threads_data_nologin_{shard}.csv), lalu meng-upload-nya sebagai artifact.
+# Job merge-commit (TUNGGAL, berjalan setelah kedua shard selesai) mengunduh
+# kedua artifact, menjalankan merge_threads_shards.py ->
+# threads_data_nologin.csv (dedup post_id, idempoten: isi gabungan hanya
+# bergantung pada isi file shard), lalu commit-back.
+#
+# SATU writer untuk commit-back = tidak ada race antar shard. Desain lama
+# (setiap job matrix merge + commit-back sendiri) cacat: kedua job menulis
+# ulang threads_data_nologin.csv dengan append di akhir file, sehingga
+# 'git pull --rebase' milik job yang push belakangan SELALU konflik;
+# retry loop tidak bisa resolve (rebase tertahan di tengah), dan step tetap
+# exit 0 karena perintah terakhirnya 'sleep'. Hasil: baris baru shard yang
+# kalah (praktis selalu shard b, karena shard a start ~2 menit lebih dulu)
+# tidak pernah sampai ke main, tanpa error yang terlihat.
+#
 # Concurrency PER SHARD (di level job, karena context matrix hanya tersedia
 # di sana): a dan b bisa jalan bersamaan; run shard yang sama tidak tumpang
-# tindih. Commit-back memakai pull --rebase + retry agar tidak konflik
-# antar shard.
+# tindih.
+#
 # Repo PUBLIK -> menit Actions unlimited (standard runner), tanpa secret.
+
 on:
   workflow_dispatch:
   schedule:
@@ -33,7 +45,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # perlu riwayat penuh supaya pull --rebase bisa jalan
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -50,6 +62,35 @@ jobs:
           KEYWORD_SHARD: ${{ matrix.shard }}
         run: python threads_scraper_nologin.py
 
+      - name: Upload shard CSV sebagai artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: threads_data_nologin_${{ matrix.shard }}.csv
+          retention-days: 1
+
+  merge-commit:
+    needs: collect
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Unduh shard CSV dari kedua job matrix
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          merge-multiple: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Merge shard -> CSV gabungan
         run: python merge_threads_shards.py
 
@@ -57,15 +98,17 @@ jobs:
         run: |
           git config user.name "threads-collector"
           git config user.email "threads-collector@users.noreply.github.com"
-          git add threads_data_nologin.csv "threads_data_nologin_${{ matrix.shard }}.csv"
-          for f in threads_data_nologin_a.csv threads_data_nologin_b.csv; do
-            [ -f "$f" ] && git add "$f"
-          done
+          git add threads_data_nologin.csv threads_data_nologin_a.csv threads_data_nologin_b.csv
           if git diff --cached --quiet; then
             echo "tidak ada baris baru, lewati commit"
           else
-            git commit -m "threads nologin: tambah hasil scraping (shard ${{ matrix.shard }})"
+            git commit -m "threads nologin: tambah hasil scraping (2 shard)"
+            ok=0
             for i in 1 2 3 4 5; do
-              git pull --rebase && git push && break || sleep 15
+              if git pull --rebase && git push; then ok=1; break; fi
+              sleep 15
             done
+            # gagal push harus MERAH (exit 1), jangan lolos diam-diam seperti
+            # desain lama yang step-nya exit 0 karena perintah terakhir 'sleep'
+            [ "$ok" = 1 ] || { echo "commit-back GAGAL setelah 5x percobaan"; exit 1; }
           fi
