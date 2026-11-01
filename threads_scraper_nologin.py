@@ -18,26 +18,37 @@ Adaptasi dari threads_scraper.py (unggahan user):
   karena membuka tiap postingan tanpa login jauh lebih sering kena login wall.
 - Kalau file dataset_karhutla_threads_nlp.csv ada di folder yang sama,
   post_id yang sudah ada di sana dilewati (tidak duplikat dengan 213 baris lama).
-- File hasil bersifat kumulatif: setiap run MENAMBAH baris baru ke
-  threads_data_nologin.csv (bukan menimpa), dan post_id dari run sebelumnya
-  ikut dilewati. Jadi workflow GitHub Actions bisa commit-back file yang sama
-  berulang kali tanpa kehilangan hasil run sebelumnya.
+- File hasil bersifat kumulatif: setiap run MENAMBAH baris baru ke file shard
+  (bukan menimpa), dan post_id dari run sebelumnya ikut dilewati. Jadi
+  workflow GitHub Actions bisa commit-back file yang sama berulang kali
+  tanpa kehilangan hasil run sebelumnya.
 - Tidak butuh secret apa pun (tanpa login, tanpa API key).
 
 - Durasi target 60 menit per run: semua kata kunci dipindai berulang (pass)
   sampai 60 menit, jeda 3 menit antar pass; dedup via post_id jadi hanya
   postingan baru yang ditambah.
 
+- MODE SHARD (2 jalur paralel, sejak 1 Nov 2026): env KEYWORD_SHARD="a"
+  memakai 11 kata kunci pertama dan menulis threads_data_nologin_a.csv;
+  KEYWORD_SHARD="b" memakai 11 kata kunci terakhir dan menulis
+  threads_data_nologin_b.csv. Dedup post_id bersifat GLOBAL: semua file
+  threads_data_nologin*.csv (termasuk file gabungan) dibaca saat start.
+  Setelah scrape, workflow menjalankan merge_threads_shards.py untuk
+  menggabung kedua shard -> threads_data_nologin.csv (dedup post_id).
+  Tanpa env (""), perilaku lama: semua 22 kata kunci -> threads_data_nologin.csv.
+
 Cara pakai (di komputer sendiri, sekali saja):
     pip install playwright
     playwright install chromium
     python threads_scraper_nologin.py
 
-Hasil: threads_data_nologin.csv (UTF-8-SIG, 20 kolom).
+Hasil: threads_data_nologin_{a,b}.csv per shard + threads_data_nologin.csv
+gabungan (UTF-8-SIG, 20 kolom).
 """
 
 import asyncio
 import csv
+import glob
 import json
 import os
 import random
@@ -74,10 +85,21 @@ KEYWORDS = [
     "perusahaan bakar lahan",
     "kabut asap karhutla",
 ]
+
+# --- Mode shard: 2 jalur paralel, masing-masing 11 kata kunci ---
+_SHARD = os.environ.get("KEYWORD_SHARD", "").strip().lower()
+if _SHARD == "a":
+    KEYWORDS = KEYWORDS[:11]
+    OUTPUT_CSV = "threads_data_nologin_a.csv"
+elif _SHARD == "b":
+    KEYWORDS = KEYWORDS[11:]
+    OUTPUT_CSV = "threads_data_nologin_b.csv"
+else:
+    OUTPUT_CSV = "threads_data_nologin.csv"
+
 TARGET_TOTAL = 5000        # batas atas; tanpa login realistisnya jauh di bawah ini
 MAX_SCROLL = 40            # scroll maksimum per keyword (berhenti dini kalau mentok)
 SORT_RECENT = True         # True = terbaru; kemungkinan diabaikan Threads untuk tamu
-OUTPUT_CSV = "threads_data_nologin.csv"
 EXISTING_CSV = "dataset_karhutla_threads_nlp.csv"  # opsional, untuk lewati duplikat lama
 HEADLESS = True            # True = browser tidak tampil di layar
 MIN_RUNTIME_MINUTES = 60   # durasi target per run; kata kunci dipindai berulang
@@ -100,10 +122,12 @@ current_keyword = ""
 def load_existing_ids():
     """Muat post_id yang sudah ada supaya tidak dikumpulkan ulang.
 
-    Sumbernya dua file (kalau ada): dataset lama dan file hasil run
-    sebelumnya. Dengan begitu run berulang hanya menambah baris baru.
+    Sumbernya: dataset lama + SEMUA file threads_data_nologin*.csv yang ada
+    (file shard a/b dan file gabungan), jadi dedup bersifat global antar
+    shard. Dengan begitu run berulang hanya menambah baris baru.
     """
-    for path in (EXISTING_CSV, OUTPUT_CSV):
+    paths = [EXISTING_CSV] + sorted(glob.glob("threads_data_nologin*.csv"))
+    for path in paths:
         if not os.path.exists(path):
             continue
         try:
@@ -113,7 +137,8 @@ def load_existing_ids():
                         seen_ids.add(row["post_id"])
         except Exception as e:
             print(f"[INFO] gagal baca {path} ({e}), lewati.")
-    print(f"[INFO] {len(seen_ids)} post_id lama dimuat, akan dilewati.")
+    print(f"[INFO] {len(seen_ids)} post_id lama dimuat dari {len(paths)} file, "
+          f"akan dilewati. (shard={_SHARD or 'semua'}, {len(KEYWORDS)} keyword)")
 
 
 def extract(obj):
