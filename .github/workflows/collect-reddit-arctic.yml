@@ -1,0 +1,42 @@
+name: Karhutla Collector Reddit (Arctic Shift)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */12 * * *"
+
+concurrency:
+  group: reddit-arctic
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MAX_MINUTES: "55"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Kumpulkan Reddit (Arctic Shift, gratis)
+        run: python3 collect_reddit_arctic.py
+
+      - name: Commit-back CSV + state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dataset_karhutla_reddit_nlp.csv reddit_arctic_state.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "tidak ada perubahan"
+            exit 0
+          fi
+          git commit -m "reddit: $(date -u +%Y-%m-%dT%H:%M)Z"
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push origin main && break
+            echo "push gagal, coba lagi ($i)"; sleep 15
+          done
+          git push origin main || exit 1
