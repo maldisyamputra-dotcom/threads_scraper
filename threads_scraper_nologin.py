@@ -28,15 +28,17 @@ Adaptasi dari threads_scraper.py (unggahan user):
   sampai 60 menit, jeda 3 menit antar pass; dedup via post_id jadi hanya
   postingan baru yang ditambah.
 
-- MODE SHARD (2 jalur paralel, sejak 1 Nov 2026): env KEYWORD_SHARD="a"
-  memakai 11 kata kunci pertama dan menulis threads_data_nologin_a.csv;
-  KEYWORD_SHARD="b" memakai 11 kata kunci terakhir dan menulis
-  threads_data_nologin_b.csv. Dedup post_id bersifat GLOBAL: semua file
-  threads_data_nologin*.csv (termasuk file gabungan) dibaca saat start.
-  Setelah scrape, workflow menjalankan merge_threads_shards.py untuk
-  menggabung kedua shard -> threads_data_nologin.csv (dedup post_id).
-  Tanpa env (""), perilaku lama: semua 22 kata kunci -> threads_data_nologin.csv.
-
+- MODE SHARD (4 jalur paralel, sejak 2 Nov 2026): env KEYWORD_SHARD="a"
+  memakai 6 kata kunci pertama dan menulis threads_data_nologin_a.csv;
+  KEYWORD_SHARD="b" memakai 6 kata kunci berikutnya dan menulis
+    threads_data_nologin_b.csv; KEYWORD_SHARD="c" memakai 5 kata kunci
+      berikutnya dan menulis threads_data_nologin_c.csv; KEYWORD_SHARD="d"
+        memakai 5 kata kunci terakhir dan menulis threads_data_nologin_d.csv.
+          Dedup post_id bersifat GLOBAL: semua file threads_data_nologin*.csv
+            (termasuk file gabungan) dibaca saat start. Setelah scrape, workflow
+              menjalankan merge_threads_shards.py untuk menggabung keempat shard ->
+                threads_data_nologin.csv (dedup post_id). Tanpa env (""), perilaku lama:
+                  semua 22 kata kunci -> threads_data_nologin.csv.
 Cara pakai (di komputer sendiri, sekali saja):
     pip install playwright
     playwright install chromium
@@ -86,17 +88,22 @@ KEYWORDS = [
     "kabut asap karhutla",
 ]
 
-# --- Mode shard: 2 jalur paralel, masing-masing 11 kata kunci ---
+# --- Mode shard: 4 jalur paralel, masing-masing 5-6 kata kunci ---
 _SHARD = os.environ.get("KEYWORD_SHARD", "").strip().lower()
 if _SHARD == "a":
-    KEYWORDS = KEYWORDS[:11]
-    OUTPUT_CSV = "threads_data_nologin_a.csv"
+      KEYWORDS = KEYWORDS[:6]
+      OUTPUT_CSV = "threads_data_nologin_a.csv"
 elif _SHARD == "b":
-    KEYWORDS = KEYWORDS[11:]
-    OUTPUT_CSV = "threads_data_nologin_b.csv"
+      KEYWORDS = KEYWORDS[6:12]
+      OUTPUT_CSV = "threads_data_nologin_b.csv"
+elif _SHARD == "c":
+      KEYWORDS = KEYWORDS[12:17]
+      OUTPUT_CSV = "threads_data_nologin_c.csv"
+elif _SHARD == "d":
+      KEYWORDS = KEYWORDS[17:]
+      OUTPUT_CSV = "threads_data_nologin_d.csv"
 else:
-    OUTPUT_CSV = "threads_data_nologin.csv"
-
+      OUTPUT_CSV = "threads_data_nologin.csv"
 TARGET_TOTAL = 5000        # batas atas; tanpa login realistisnya jauh di bawah ini
 MAX_SCROLL = 40            # scroll maksimum per keyword (berhenti dini kalau mentok)
 SORT_RECENT = True         # True = terbaru; kemungkinan diabaikan Threads untuk tamu
