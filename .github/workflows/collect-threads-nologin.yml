@@ -6,6 +6,10 @@ name: Karhutla Collector Threads (tanpa login)
 # menggabung kedua shard -> threads_data_nologin.csv (dedup post_id, global
 # antar shard). Concurrency per shard supaya a dan b bisa jalan bersamaan;
 # commit-back memakai pull --rebase + retry agar tidak konflik antar shard.
+# Concurrency PER SHARD (di level job, karena context matrix hanya tersedia
+# di sana): a dan b bisa jalan bersamaan; run shard yang sama tidak tumpang
+# tindih. Commit-back memakai pull --rebase + retry agar tidak konflik
+# antar shard.
 # Repo PUBLIK -> menit Actions unlimited (standard runner), tanpa secret.
 on:
   workflow_dispatch:
@@ -15,12 +19,11 @@ on:
 permissions:
   contents: write  # untuk commit-back CSV hasil
 
-concurrency:
-  group: threads-nologin-${{ matrix.shard }}
-  cancel-in-progress: false
-
 jobs:
   collect:
+    concurrency:
+      group: threads-nologin-${{ matrix.shard }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
