@@ -9,6 +9,9 @@ concurrency:
   group: reddit-arctic
   cancel-in-progress: false
 
+permissions:
+  contents: write  # untuk commit-back CSV hasil
+
 jobs:
   collect:
     runs-on: ubuntu-latest
@@ -17,14 +20,13 @@ jobs:
       MAX_MINUTES: "55"
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Kumpulkan Reddit (Arctic Shift, gratis)
         run: python3 collect_reddit_arctic.py
-
       - name: Commit-back CSV + state
         run: |
           git config user.name "github-actions[bot]"
