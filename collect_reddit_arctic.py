@@ -110,19 +110,48 @@ def search_posts(keyword, subreddit, limit=100):
         'fields': 'title,id,num_comments,created_utc,author,selftext,score'})
     return (d or {}).get('data') or []
 
+def _unwrap_comment(it):
+    """Arctic Shift membungkus komentar sebagai {"kind": "t1", "data": {...}}."""
+    if isinstance(it, dict):
+        d = it.get('data')
+        if isinstance(d, dict) and d.get('id'):
+            return d
+        if it.get('id'):
+            return it
+    return {}
+
+def _children(c):
+    rep = (c or {}).get('replies') or {}
+    if isinstance(rep, dict):
+        return (rep.get('data') or {}).get('children') or []
+    return rep or []
+
 def fetch_tree(post_id):
     d = api('/api/comments/tree', {'link_id': 't3_' + post_id, 'limit': 10000})
     data = (d or {}).get('data') or []
     out = []
     def walk(items):
         for it in items or []:
-            out.append(it)
-            walk(it.get('replies') or [])
+            c = _unwrap_comment(it)
+            if not c.get('id'):
+                continue
+            out.append(c)
+            walk(_children(c))
     walk(data)
     return out
 
 def main():
     st = load_state()
+    if st.get('tree_unwrap_fix') != 1:
+        # Perbaikan bug 2026-11-03: fetch_tree tidak membuka bungkus {"kind","data"}
+        # dari Arctic Shift sehingga 0 komentar tersimpan (6.067 komentar terlewat).
+        # Reset done_posts agar tree seluruh postingan di-backfill ulang;
+        # duplikat aman via dedup post_id.
+        n_done = len(st.get('done_posts', []))
+        st['done_posts'] = []
+        st['tree_unwrap_fix'] = 1
+        save_state(st)
+        log(f"[MIGRASI] tree_unwrap_fix: reset {n_done} done_posts untuk backfill komentar")
     seen = load_seen()
     st['total'] = len(seen)
     done_posts = set(st['done_posts'])
