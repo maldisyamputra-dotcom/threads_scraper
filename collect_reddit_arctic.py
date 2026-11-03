@@ -140,6 +140,50 @@ def fetch_tree(post_id):
     walk(data)
     return out
 
+def build_backfill_list(csv_path, tree_done):
+    """Daftar (pid, search_query) postingan di CSV yang reply_count>0 dan
+    tree komentarnya belum di-backfill. Sumber kebenaran = CSV, bukan
+    done_posts (yang sempat di-reset migrasi tree_unwrap_fix TANPA backfill
+    benar-benar jalan, karena semua keyword sudah kw_done)."""
+    need = []
+    try:
+        with open(csv_path, encoding='utf-8-sig', newline='') as f:
+            for row in csv.DictReader(f):
+                if row.get('post_type') != 'post':
+                    continue
+                try:
+                    rc = int(row.get('reply_count') or 0)
+                except ValueError:
+                    rc = 0
+                if rc <= 0:
+                    continue
+                post_id = row.get('post_id') or ''
+                pid = post_id[3:] if post_id.startswith('t3_') else post_id
+                if not pid or pid in tree_done:
+                    continue
+                need.append((pid, row.get('search_query') or ''))
+    except FileNotFoundError:
+        pass
+    return need
+
+def comment_row(c, pid, kw, now):
+    """Bangun baris CSV 20 kolom untuk satu komentar hasil fetch_tree."""
+    cid = str(c.get('id'))
+    cpid = str(c.get('parent_id') or '')
+    ptype = 'comment' if cpid == 't3_' + pid else 'reply_comment'
+    ctxt = clean(c.get('body'))
+    return {'post_id': cid, 'parent_post_id': cpid, 'post_type': ptype,
+            'platform': 'reddit', 'scraped_at': now,
+            'created_at': ts_iso(c.get('created_utc')), 'search_query': kw,
+            'author_username': c.get('author') or '', 'author_display_name': c.get('author') or '',
+            'is_verified': 'False', 'raw_text': ctxt, 'clean_text_initial': ctxt,
+            'language': 'id',
+            'hashtags': json.dumps(['#' + h for h in HASHTAG_RE.findall(ctxt)], ensure_ascii=False),
+            'mentions': json.dumps(['@' + u for u in MENTION_RE.findall(ctxt)], ensure_ascii=False),
+            'reply_count': 0, 'repost_count': 0,
+            'like_count': int(c.get('score') or 0), 'view_count': 0,
+            'post_url': 'https://redd.it/' + pid}
+
 def main():
     st = load_state()
     if st.get('tree_unwrap_fix') != 1:
@@ -184,6 +228,41 @@ def main():
         return True
 
     now = datetime.datetime.now(WIB).strftime('%Y-%m-%dT%H:%M:%S')
+
+    # --- Backfill tree komentar (perbaikan lanjutan 2026-11-03) ---
+    # Run #8 (fix unwrap) hanya menjalankan migrasi reset done_posts lalu exit
+    # dalam 1 detik karena semua keyword sudah kw_done — tree tidak pernah
+    # diambil. Pass mandiri ini membaca ulang kebutuhan dari CSV (bukan
+    # done_posts) sehingga migrasi yang sudah terkonsumsi tidak jadi masalah.
+    # Idempoten: tree_done di state + dedup post_id di add(). Lanjut otomatis
+    # di run berikut bila budget habis (jadwal 12 jam / trigger manual).
+    tree_done = set(st.get('tree_done', []))
+    need = build_backfill_list(CSV_PATH, tree_done)
+    if need:
+        log(f"[BACKFILL] {len(need)} postingan perlu tree komentar")
+    try:
+        for pid, kw in need:
+            if budget_left() < 180:
+                log('[STOP] budget menit habis, stop halus (backfill lanjut run berikut)')
+                break
+            try:
+                tree = fetch_tree(pid)
+            except IOError as e:
+                log(f"[BACKFILL-FAIL] {pid}: {e}")
+                if 'budget' in str(e):
+                    break
+                continue
+            for c in tree:
+                add(comment_row(c, pid, kw, now))
+            log(f"[BACKFILL] {pid}: {len(tree)} komentar ditarik")
+            tree_done.add(pid)
+            st['tree_done'] = sorted(tree_done)
+            save_state(st)
+            flush()
+            time.sleep(12 + random.uniform(0, 6))
+    except KeyboardInterrupt:
+        log('[STOP] interupsi')
+
     try:
         for kw in KEYWORDS:
             if budget_left() < 180:
@@ -232,21 +311,7 @@ def main():
                             if 'budget' in str(e):
                                 tree_ok = False
                         for c in tree:
-                            cid = str(c.get('id'))
-                            cpid = str(c.get('parent_id') or '')
-                            ptype = 'comment' if cpid == 't3_' + pid else 'reply_comment'
-                            ctxt = clean(c.get('body'))
-                            add({'post_id': cid, 'parent_post_id': cpid, 'post_type': ptype,
-                                 'platform': 'reddit', 'scraped_at': now,
-                                 'created_at': ts_iso(c.get('created_utc')), 'search_query': kw,
-                                 'author_username': c.get('author') or '', 'author_display_name': c.get('author') or '',
-                                 'is_verified': 'False', 'raw_text': ctxt, 'clean_text_initial': ctxt,
-                                 'language': 'id',
-                                 'hashtags': json.dumps(['#' + h for h in HASHTAG_RE.findall(ctxt)], ensure_ascii=False),
-                                 'mentions': json.dumps(['@' + u for u in MENTION_RE.findall(ctxt)], ensure_ascii=False),
-                                 'reply_count': 0, 'repost_count': 0,
-                                 'like_count': int(c.get('score') or 0), 'view_count': 0,
-                                 'post_url': 'https://redd.it/' + pid})
+                            add(comment_row(c, pid, kw, now))
                         log(f"[POST] {pid}: {len(tree)} komentar ditarik")
                     if tree_ok:
                         done_posts.add(pid)
@@ -264,6 +329,7 @@ def main():
         log('[STOP] interupsi')
     st['done_posts'] = sorted(done_posts)
     st['kw_done'] = sorted(kw_done)
+    st['tree_done'] = sorted(tree_done)
     flush()
     save_state(st)
     log(f"[DONE] total={st['total']} -> {CSV_PATH}")
