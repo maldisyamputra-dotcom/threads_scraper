@@ -4,6 +4,8 @@
 Strategi: title search per keyword di r/indonesia -> comments/tree per post.
 Dedup by post_id lawan CSV yang sudah ada. Berhenti halus saat budget menit habis.
 Skema CSV: 20 kolom, sama dengan dataset_karhutla_reddit_nlp.csv (skripsi).
+Re-sweep Nov 2026: migrasi satu-kali resweep_nov2026 mereset kw_done agar loop
+keyword jalan lagi menjaring postingan baru; done_posts & tree_done dipertahankan.
 """
 import csv, json, os, re, sys, time, random, datetime
 import urllib.request, urllib.parse
@@ -196,6 +198,20 @@ def main():
         st['tree_unwrap_fix'] = 1
         save_state(st)
         log(f"[MIGRASI] tree_unwrap_fix: reset {n_done} done_posts untuk backfill komentar")
+    if st.get('resweep_nov2026') != 1:
+        # Re-sweep Nov 2026 (10 Nov): kolektor sekali-jalan, kw_done sudah penuh
+        # 22/22 sehingga run terjadwal no-op. Reset HANYA kw_done agar loop
+        # keyword jalan lagi menjaring postingan BARU sejak awal November.
+        # done_posts & tree_done DIPERTAHANKAN: dedup post_id (seen dari CSV)
+        # mencegah baris lama masuk dua kali; tree_done mencegah fetch ulang
+        # tree komentar lama. Idempoten: flag sekali-jalan, keyword yang sudah
+        # diproses di run ini kembali masuk kw_done; run berikut no-op lagi
+        # bila tidak ada postingan baru.
+        n_kw = len(st.get('kw_done', []))
+        st['kw_done'] = []
+        st['resweep_nov2026'] = 1
+        save_state(st)
+        log(f"[RESWEEP] reset {n_kw} kw_done untuk sapuan ulang Nov 2026 (done_posts/tree_done dipertahankan)")
     seen = load_seen()
     st['total'] = len(seen)
     done_posts = set(st['done_posts'])
@@ -302,7 +318,7 @@ def main():
                            'post_url': 'https://redd.it/' + pid}
                     add(row)
                     tree_ok = True
-                    if int(p.get('num_comments') or 0) > 0:
+                    if int(p.get('num_comments') or 0) > 0 and pid not in tree_done:
                         try:
                             tree = fetch_tree(pid)
                         except IOError as e:
@@ -313,6 +329,14 @@ def main():
                         for c in tree:
                             add(comment_row(c, pid, kw, now))
                         log(f"[POST] {pid}: {len(tree)} komentar ditarik")
+                        if tree_ok:
+                            # Catat tree_done juga untuk tree yang diambil inline
+                            # (sebelumnya hanya pass backfill yang mencatat) agar
+                            # pass backfill run berikut tidak fetch ulang.
+                            tree_done.add(pid)
+                            st['tree_done'] = sorted(tree_done)
+                    elif pid in tree_done:
+                        log(f"[POST] {pid}: tree sudah ada (tree_done), fetch dilewati")
                     if tree_ok:
                         done_posts.add(pid)
                         st['done_posts'] = sorted(done_posts)
